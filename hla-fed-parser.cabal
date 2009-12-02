@@ -11,12 +11,22 @@ license:                PublicDomain
 homepage:               /dev/null
 
 category:               Unclassified
-synopsis:               I'm too lame to describe my project
-description:            I'm too lame to describe my project
+synopsis:               Parser/Serializer for HLA "fed" files
+description:            Parser/Serializer for HLA "fed" files.  The "fed"
+                        file format is a very high level sketch of the 
+                        structure of a HLA federation object model.  By itself
+                        it is next to useless, but the HLA spec nevertheless
+                        mandates that every federation have one.  The 
+                        interface to this library is highly unstable.  In
+                        future releases, the "Fed" type will almost certainly
+                        be opaque, and its representation may change.  For now
+                        it is left open because there are no public functions
+                        for altering its contents.
 
 Library
   hs-source-dirs:       src
-  exposed-modules:      Codec.FedFile
-  other-modules:        Codec.FedFile.Stage1
-                        Codec.FedFile.Stage2
+  exposed-modules:      Text.FedFile
+  other-modules:        Text.FedFile.Stage1
+                        Text.FedFile.Stage2
+                        Text.FedFile.TreeUtils
   build-depends:        base >= 4 && <5, containers, sexpr >= 0.3, mtl

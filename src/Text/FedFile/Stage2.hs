@@ -7,10 +7,10 @@
 -- |Stage 2; extract fed data a tagged s-expr-like structure into a 
 -- user-friendly format.  Essentially, consists of collapsing a list
 -- of cotuples to a tuple of lists, somewhat like Data.Either.partitionEithers.
-module Codec.FedFile.Stage2 where
+module Text.FedFile.Stage2 where
 
 import Text.SExpr
-import Codec.FedFile.Stage1
+import Text.FedFile.Stage1
 import Control.Monad.State
 import Control.Monad.Reader
 import Control.Monad.Error ({- instance Error e => Monad (Either e) -})
@@ -18,13 +18,16 @@ import Data.List
 import Data.Maybe
 import Text.Printf
 import qualified Data.Map as M
+import Data.Tree
 
 data Fed = Fed
-    { fedName           :: String
-    , fedVersion        :: String
-    , fedSpaces         :: M.Map String [String]
-    , fedClasses        :: M.Map String [FedClass]
-    , fedInteractions   :: M.Map String [FedInteraction]
+    { fedName               :: String
+    , fedVersion            :: String
+    , fedSpaces             :: M.Map String [String]
+    , fedClasses            :: Forest FedClass
+    , fedClassesByName      :: M.Map String [FedClass]
+    , fedInteractions       :: Forest FedInteraction
+    , fedInteractionsByName :: M.Map String [FedInteraction]
     } deriving (Eq, Show)
 
 data FedClass = FedClass
@@ -34,10 +37,12 @@ data FedClass = FedClass
     } deriving (Eq, Show)
 
 data FedInteraction = FedInteraction
-    { interactionName   :: String
-    , interactionParents:: [String]
-    , interactionSpaces :: [String]
-    , interactionParams :: [String]
+    { interactionName       :: String
+    , interactionParents    :: [String]
+    , interactionDelivery   :: Delivery
+    , interactionOrder      :: Order
+    , interactionSpaces     :: [String]
+    , interactionParams     :: [String]
     } deriving (Eq, Show)
 
 data Attribute = Attribute
@@ -86,7 +91,7 @@ assertEmpty cxt = do
         printf "\"%s\" element has %d unparsed items: \n%s" 
             cxt (length rest) (unlines (map (('\t' :) . limitStr 200 . show) rest))
 
-fedListToFed :: Monad m => [FedList (SExpr FedList String)] -> m Fed
+fedListToFed :: (Show t, Monad m) => [FedList t] -> m Fed
 fedListToFed fedList = flip evalStateT fedList $ do
     -- A fairly ad-hoc monad.  Essentially a state monad with "fail" mapped to
     -- "error" and a convenience function "extract" which matches part of the
@@ -126,7 +131,7 @@ fedListToFed fedList = flip evalStateT fedList $ do
     objects <- extract fromObjects
     
     -- turn the class heirarchy right-side-out
-    let invertClass :: (Show t, Monad m) => [String] -> (String, [FedList t]) -> m [(String, [FedClass])]
+    let invertClass :: (Show t, Monad m) => [String] -> (String, [FedList t]) -> m (Tree FedClass)
         invertClass parents (name, clsContent) = flip evalStateT clsContent $ do
             -- get attributes
             attributes <- extract fromAttr
@@ -141,7 +146,7 @@ fedListToFed fedList = flip evalStateT fedList $ do
             
             assertEmpty ("class " ++ name)
             
-            return ((name, [self]) : concat subClasses)
+            return (Node self subClasses)
     
     -- extract root class(es)
     classes <- assertOnly "objects" fromClass (concat objects)
@@ -150,11 +155,11 @@ fedListToFed fedList = flip evalStateT fedList $ do
         | rootClass <- classes
         ]
     
-    let invertInteraction :: (Show t, Monad m) => [String] -> (String, Delivery, Order, [String], [FedList t]) -> m [(String, [FedInteraction])]
+    let invertInteraction :: (Show t, Monad m) => [String] -> (String, Delivery, Order, [String], [FedList t]) -> m (Tree FedInteraction)
         invertInteraction parents (name, mode, ord, spaces, content) = flip evalStateT content $ do
             -- get parameters
             params <- extract fromParameter
-            let self = FedInteraction name parents spaces params
+            let self = FedInteraction name parents mode ord spaces params
             
             -- get subclasses
             subClasses <- extract fromInteraction
@@ -162,7 +167,7 @@ fedListToFed fedList = flip evalStateT fedList $ do
             
             assertEmpty ("class " ++ name)
             
-            return ((name, [self]) : concat subClasses)
+            return (Node self subClasses)
     
     interactions <- extract fromInteractions
     interactions <- assertOnly "interactions" fromInteraction (concat interactions)
@@ -171,13 +176,19 @@ fedListToFed fedList = flip evalStateT fedList $ do
         | rootClass <- interactions
         ]
     
+    -- index classes and interactions by name
+    let classesByName = M.fromListWith (++) . fmap (\cls -> (className cls, [cls])) $ concatMap flatten classes
+        interactionsByName = M.fromListWith (++) . fmap (\cls -> (interactionName cls, [cls])) $ concatMap flatten interactions
+    
     assertEmpty "FED"
     return Fed 
-        { fedName           = name
-        , fedVersion        = version
-        , fedSpaces         = M.fromList spaces
-        , fedClasses        = M.fromListWith (++) (concat classes)
-        , fedInteractions   = M.fromListWith (++) (concat interactions)
+        { fedName               = name
+        , fedVersion            = version
+        , fedSpaces             = M.fromList spaces
+        , fedClasses            = classes
+        , fedClassesByName      = classesByName
+        , fedInteractions       = interactions
+        , fedInteractionsByName = interactionsByName
         }
 
 fedSExprToFed (fromList -> Just (FED fedItems)) = fedListToFed fedItems
@@ -191,16 +202,30 @@ readFed f = case fedSExprToFed (readFedSExpr f) of
 readFedFromFile :: FilePath -> IO Fed
 readFedFromFile file = fmap readFed (readFile file)
 
-fedToFedSExpr :: Fed -> SExpr FedList String
-fedToFedSExpr Fed{..} = list $ FED
+fedToFedSExpr :: Fed -> SExpr FedList t
+fedToFedSExpr fed = list (fedToFedList fed)
+
+fedToFedList :: Fed -> FedList t
+fedToFedList Fed{..} = FED
     [ FederationName fedName
     , FederationVersion fedVersion
     , Spaces        [ Space s (map Dimension dims)
                     | (s, dims) <- M.assocs fedSpaces
                     ]
-    , Objects       writeMe
-    , Interactions  writeMe
-    ] where writeMe = error "fedToFedSExpr: write me!"
+    , Objects       $ let unfoldClass (Node FedClass{..} subClasses) 
+                            = Class className (map toAttr (M.elems classAttributes) 
+                                            ++ map unfoldClass subClasses)
+                          toAttr Attribute{..} = Attr attrName attrDelivery attrOrder attrSpaces
+                       in map unfoldClass fedClasses
+    , Interactions  $ let unfoldInteraction (Node FedInteraction{..} subClasses) 
+                            = Interaction interactionName 
+                                          interactionDelivery
+                                          interactionOrder
+                                          interactionSpaces
+                                          (map Parameter interactionParams
+                                        ++ map unfoldInteraction subClasses)
+                       in map unfoldInteraction fedInteractions
+    ]
 
 showFed :: Fed -> String
 showFed = showFedSExpr . fedToFedSExpr

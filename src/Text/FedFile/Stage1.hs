@@ -8,12 +8,16 @@
 -- "kinds" (basically, interpret each list as a fragment of a FED based
 -- on the atom the list starts with).  Stage 2 will be to translate this
 -- tagged structure to a more user-friendly fed file representation
-module Codec.FedFile.Stage1 where
+module Text.FedFile.Stage1 where
 
 import Text.SExpr
 import Control.Monad.RWS
 
--- |Intermediate structure used when translating from a raw SExpr
+-- |Intermediate structure used when translating from a raw SExpr.
+-- The only level where the @a@ parameter appears (directly) is in the
+-- unparsed case, so although a FedList is still nominally an SExpr
+-- and still mirrors all the structure of the SExpr, the SExpr type will
+-- have been totally expunged from it if the conversion succeeded.
 data FedList a
     = FED [FedList a]
     | FederationName String
@@ -114,6 +118,9 @@ instance Show Order where
     showsPrec _ Receive   = showString "receive"
     showsPrec _ Timestamp = showString "timestamp"
 
+-- |Given 2 coercions and a list, try to break it into 2 contiguous pieces,
+-- the first of which passes the first coercion and the second of which
+-- passes the second coercion.
 breakMaybe :: (a -> Maybe b) -> (a -> Maybe c) -> [a] -> Maybe ([b],[c])
 breakMaybe p q = start id
     where
@@ -124,31 +131,27 @@ breakMaybe p q = start id
         end ps qs ((q -> Just x) : xs) = end ps (qs . (x:)) xs
         end ps qs _ = Nothing
 
+-- very common form of lists in a fed file: some atoms and then some lists.
+taggedList :: [SExpr l a] -> Maybe ([a], [l (SExpr l a)])
+taggedList = breakMaybe fromAtom fromList
+
+-- The only other form of lists in a fed file: just atoms.
+fromAtoms :: [SExpr l a] -> Maybe [a]
+fromAtoms = mapM fromAtom
+
 listToFedList :: [SExpr FedList String] -> FedList (SExpr FedList String)
-listToFedList ((fromAtom -> Just "FED") : (mapM fromList -> Just rest))     = FED rest
-listToFedList (mapM fromAtom -> Just ["Federation", name])                  = FederationName name
-listToFedList (mapM fromAtom -> Just ["FEDversion", vers])                  = FederationVersion vers
-listToFedList ( (fromAtom -> Just "spaces")
-              : (mapM fromList -> Just rest))                               = Spaces rest
-listToFedList ( (fromAtom -> Just "space")
-              : (fromAtom -> Just name)
-              : (mapM fromList -> Just dims))                               = Space name dims
-listToFedList (mapM fromAtom -> Just ["dimension", name])                   = Dimension name
-listToFedList ( (fromAtom -> Just "objects") 
-              : (mapM fromList -> Just rest))                               = Objects rest
-listToFedList ( (fromAtom -> Just "class")
-              : (fromAtom -> Just name)
-              : (mapM fromList -> Just rest))                               = Class name rest
-listToFedList (mapM fromAtom -> Just ("attribute":name:mode:ord:rest))      = Attr name (read mode) (read ord) rest
-listToFedList ( (fromAtom -> Just "interactions")
-              : (mapM fromList -> Just rest))                               = Interactions rest
-listToFedList ( (fromAtom -> Just "class")
-              : (fromAtom -> Just name)
-              : (fromAtom -> Just mode)
-              : (fromAtom -> Just ord)
-              : (breakMaybe fromAtom fromList -> Just (spaces, rest))    
-              )                                                             = Interaction name (read mode) (read ord) spaces rest
-listToFedList (mapM fromAtom -> Just ["parameter", name])                   = Parameter name
+listToFedList (taggedList -> Just (["FED"], rest))                          = FED rest
+listToFedList (fromAtoms  -> Just ["Federation", name])                     = FederationName name
+listToFedList (fromAtoms  -> Just ["FEDversion", vers])                     = FederationVersion vers
+listToFedList (taggedList -> Just (["spaces"], rest))                       = Spaces rest
+listToFedList (taggedList -> Just (["space", name], dims))                  = Space name dims
+listToFedList (fromAtoms  -> Just ["dimension", name])                      = Dimension name
+listToFedList (taggedList -> Just (["objects"], rest))                      = Objects rest
+listToFedList (taggedList -> Just (["class", name], rest))                  = Class name rest
+listToFedList (fromAtoms  -> Just ("attribute":name:mode:ord:rest))         = Attr name (read mode) (read ord) rest
+listToFedList (taggedList -> Just (["interactions"], rest))                 = Interactions rest
+listToFedList (taggedList -> Just ("class":name:mode:ord:spaces, rest))     = Interaction name (read mode) (read ord) spaces rest
+listToFedList (fromAtoms  -> Just ["parameter", name])                      = Parameter name
 listToFedList x                                                             = Unparsed x
 
 fedListToList :: FedList (SExpr [] String) -> [SExpr [] String]
@@ -162,10 +165,21 @@ fedListToList (Objects xs)              = (atom "objects": map (list . fedListTo
 fedListToList (Class c xs)              = (atom "class" : atom c : map (list . fedListToList) xs)
 fedListToList (Attr a d o ss)           = (atom "attribute" : atom a : atom (show d) : atom (show o) : map atom ss)
 fedListToList (Interactions is)         = (atom "interactions" : map (list . fedListToList) is)
-fedListToList (Interaction n d o ss xs) = (atom "class" : atom (show d) : atom (show o) : map atom ss ++ map (list . fedListToList) xs)
+fedListToList (Interaction n d o ss xs) = (atom "class" : atom n : atom (show d) : atom (show o) : map atom ss ++ map (list . fedListToList) xs)
 fedListToList (Parameter p)             = [atom "parameter", atom p]
 fedListToList (Unparsed u)              = u
 
+fedSExprToFedList :: SExpr [] String -> FedList ()
+fedSExprToFedList
+    = fmap (\unparsed -> error ("Unparsed element in Fed: " ++ show unparsed))
+    . matchSExpr (\a  -> error ("Atom at top level of Fed: " ++ show a)) id
+    . lmap listToFedList
+
+readFedList :: String -> FedList ()
+readFedList = fedSExprToFedList . readSExprString
+
+readFedListFromFile :: FilePath -> IO (FedList ())
+readFedListFromFile file = fmap readFedList (readFile file)
 
 readFedSExpr :: String -> SExpr FedList String
 readFedSExpr = lmap listToFedList . readSExprString
@@ -179,4 +193,4 @@ showFedSExpr = advancedString . lmap fedListToList
 writeFedSExprToFile :: FilePath -> SExpr FedList String -> IO ()
 writeFedSExprToFile f = writeFile f . showFedSExpr
 
-testStage1 = readFedSExprFromFile "fom_v4.1_16JUNE2008.fed"
+testStage1 = readFedListFromFile "fom_v4.1_16JUNE2008.fed"
