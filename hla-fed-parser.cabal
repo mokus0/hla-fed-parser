@@ -11,8 +11,8 @@ license:                PublicDomain
 homepage:               /dev/null
 
 category:               Unclassified
-synopsis:               Parser/Serializer for HLA "fed" files
-description:            Parser/Serializer for HLA "fed" files.  The "fed"
+synopsis:               Parser/Serializer for HLA 1.3 "fed" files
+description:            Parser/Serializer for HLA 1.3 "fed" files.  The "fed"
                         file format is a very high level sketch of the 
                         structure of a HLA federation object model.  By itself
                         it is next to useless, but the HLA spec nevertheless
