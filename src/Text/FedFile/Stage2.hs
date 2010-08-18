@@ -194,11 +194,13 @@ fedListToFed fedList = flip evalStateT fedList $ do
 fedSExprToFed (fromList -> Just (FED fedItems)) = fedListToFed fedItems
 fedSExprToFed (fromAtom -> Just atom) = error ("atom at top level of fed file: " ++ atom)
 
+-- |Parse an HLA FED file from a 'String', throwing an 'error' if parsing fails.
 readFed :: String -> Fed
 readFed f = case fedSExprToFed (readFedSExpr f) of
     Left err    -> error err
     Right ok    -> ok
 
+-- |Parse an HLA FED file from a file, throwing an 'error' if parsing fails.
 readFedFromFile :: FilePath -> IO Fed
 readFedFromFile file = fmap readFed (readFile file)
 
@@ -227,9 +229,11 @@ fedToFedList Fed{..} = FED
                        in map unfoldInteraction fedInteractions
     ]
 
+-- |Render a 'Fed' to an HLA FED formatted 'String'.
 showFed :: Fed -> String
 showFed = showFedSExpr . fedToFedSExpr
 
+-- |Render a 'Fed' to an HLA FED file.
 writeFedToFile :: FilePath -> Fed -> IO ()
 writeFedToFile f = writeFile f . showFed
 

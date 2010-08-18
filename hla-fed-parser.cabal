@@ -29,4 +29,4 @@ Library
   other-modules:        Text.FedFile.Stage1
                         Text.FedFile.Stage2
                         Text.FedFile.TreeUtils
-  build-depends:        base >= 4 && <5, containers, sexpr >= 0.3, mtl
+  build-depends:        base >= 4 && <5, containers, s-expression >= 0.3, mtl
