@@ -22,12 +22,12 @@ import Data.Tree
 import qualified Data.Map as M
 
 -- |Get the qualified name of an object class.  A class's qualified name is
--- the class's simple name appended to its parents qualified name.
+-- the class's simple name appended to its parent's qualified name.
 classQName :: FedClass -> [String]
 classQName cls = reverse (className cls : classParents cls)
 
 -- |Get the qualified name of an interaction class.  A class's qualified name is
--- the class's simple name appended to its parents qualified name.
+-- the class's simple name appended to its parent's qualified name.
 interactionQName :: FedInteraction -> [String]
 interactionQName cls = reverse (interactionName cls : interactionParents cls)
 
